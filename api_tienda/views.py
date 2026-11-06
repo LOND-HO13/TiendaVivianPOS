@@ -10,7 +10,8 @@ from .serializers import CategoriaSerializer, ProductoSerializer, ClienteSeriali
 from django.utils import timezone
 from datetime import timedelta
 from django.db.models import Sum
-from .models import Productos, Ventas, DetalleVentas, Clientes, CuentasPorCobrar, Abonos, TransaccionesFinancieras, CajaDiaria, Categorias
+from .models import Productos, Ventas, DetalleVentas, Clientes, CuentasPorCobrar, Abonos, TransaccionesFinancieras, CajaDiaria, Categorias, Gastos
+
 
 
 @api_view(['GET', 'POST'])
@@ -42,6 +43,8 @@ def crear_producto(request):
     es_pesaje = bool(data.get('permite_decimales', False))
     precio_venta = Decimal(str(data.get('precio_detal', 0)))
     precio_costo = Decimal(str(data.get('precio_costo', precio_venta)))
+    
+    stock_minimo = Decimal(str(data.get('stock_minimo', 5)))
 
     # VALIDACIÓN CRÍTICA: No permitir crear/editar si el costo es mayor a la venta
     if precio_venta < precio_costo:
@@ -57,7 +60,8 @@ def crear_producto(request):
         unidad_medida='KG' if es_pesaje else 'UND',
         permite_decimales=es_pesaje,
         stock_actual=data.get('stock_actual', 0),
-        fecha_creacion=timezone.now()
+        fecha_creacion=timezone.now(),
+        stock_minimo=stock_minimo,  # <-- NUEVO CAMPO GUARDADO
     )
     return Response({'mensaje': 'Producto creado', 'id_producto': producto.id_producto}, status=status.HTTP_201_CREATED)
 
@@ -87,6 +91,8 @@ def editar_producto(request, id_producto):
         producto.unidad_medida = 'KG' if es_pesaje else 'UND'
     if 'stock_actual' in data:
         producto.stock_actual = data['stock_actual']
+    if 'stock_minimo' in data:
+        producto.stock_minimo = Decimal(str(data.get('stock_minimo', 5)))
 
     producto.save()
     return Response({'mensaje': 'Producto actualizado correctamente.'})
@@ -112,49 +118,119 @@ def detalles_deuda_cliente(request, id_cliente):
     except Exception as e:
         return Response({'error': str(e)}, status=500)
 
+
+@api_view(['GET', 'POST'])
+def gestionar_gastos(request):
+    ahora = timezone.localtime(timezone.now())
+    hoy = ahora.date()
+
+    if request.method == 'GET':
+        try:
+            gastos_qs = Gastos.objects.all().order_by('-id_gasto')[:60]
+            total_hoy = Gastos.objects.filter(fecha_hora__date=hoy).aggregate(total=Sum('monto'))['total'] or Decimal('0.00')
+
+            lista = []
+            for g in gastos_qs:
+                fecha_local = timezone.localtime(g.fecha_hora) if g.fecha_hora else None
+                fecha_str = fecha_local.strftime('%d/%m/%Y %I:%M %p') if fecha_local else 'Sin fecha'
+                lista.append({
+                    'id_gasto': g.id_gasto,
+                    'tipo_gasto': g.tipo_gasto,
+                    'descripcion': g.descripcion,
+                    'monto': str(g.monto),
+                    'fecha_hora': fecha_str
+                })
+
+            return Response({
+                'total_hoy': str(total_hoy),
+                'gastos': lista
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if request.method == 'POST':
+        try:
+            tipo_gasto = request.data.get('tipo_gasto', 'Proveedor').strip()
+            descripcion = request.data.get('descripcion', '').strip()
+            monto_raw = request.data.get('monto', '0')
+
+            if not descripcion:
+                return Response({'error': 'Debes escribir el motivo o proveedor del gasto.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            monto = Decimal(str(monto_raw))
+            if monto <= 0:
+                return Response({'error': 'El monto de la salida debe ser mayor a cero.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            with transaction.atomic():
+                nuevo_gasto = Gastos.objects.create(
+                    tipo_gasto=tipo_gasto,
+                    descripcion=descripcion,
+                    monto=monto,
+                    fecha_hora=timezone.now()
+                )
+
+            return Response({
+                'mensaje': 'Salida de dinero registrada correctamente.',
+                'id_gasto': nuevo_gasto.id_gasto,
+                'monto': str(nuevo_gasto.monto)
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': f'Error al registrar gasto: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+
 @api_view(['POST'])
 def cierre_de_caja(request):
     try:
         ahora = timezone.localtime(timezone.now())
         hoy = ahora.date()
 
+        # 1. Ventas del día
         ventas_hoy_qs = Ventas.objects.filter(fecha_hora__date=hoy)
-        
         ventas_efectivo = ventas_hoy_qs.filter(metodo_pago__iexact='Efectivo').aggregate(total=Sum('total_venta'))['total'] or Decimal('0.00')
         cant_ventas_efectivo = ventas_hoy_qs.filter(metodo_pago__iexact='Efectivo').count()
 
         ventas_credito = ventas_hoy_qs.filter(metodo_pago__iexact='Crédito').aggregate(total=Sum('total_venta'))['total'] or Decimal('0.00')
         cant_ventas_credito = ventas_hoy_qs.filter(metodo_pago__iexact='Crédito').count()
 
+        # 2. Abonos recibidos hoy
         abonos_hoy_qs = Abono.objects.filter(fecha_registro__date=hoy)
         abonos_totales_hoy = abonos_hoy_qs.aggregate(total=Sum('monto'))['total'] or Decimal('0.00')
         cant_abonos = abonos_hoy_qs.count()
 
-        # Cálculo de Ganancia Neta sobre todo lo vendido hoy
+        # 3. Salidas de caja y pagos a proveedores hoy
+        gastos_hoy_qs = Gastos.objects.filter(fecha_hora__date=hoy)
+        gastos_totales_hoy = gastos_hoy_qs.aggregate(total=Sum('monto'))['total'] or Decimal('0.00')
+        cant_gastos = gastos_hoy_qs.count()
+
+        # 4. Cálculo de ganancia bruta en productos vendidos hoy
         detalles_hoy = DetalleVentas.objects.select_related('id_producto').filter(id_venta__fecha_hora__date=hoy)
-        ganancia_estimada_hoy = Decimal('0.00')
+        ganancia_ventas_hoy = Decimal('0.00')
         for d in detalles_hoy:
             if d.id_producto:
                 costo = d.id_producto.precio_mayorista or Decimal('0.00')
-                ganancia_estimada_hoy += (d.precio_unitario_aplicado - costo) * d.cantidad
+                ganancia_ventas_hoy += (d.precio_unitario_aplicado - costo) * d.cantidad
 
+        # 5. Arqueo físico de efectivo en el cajón
         ingresos_efectivo_hoy = ventas_efectivo + abonos_totales_hoy
+        efectivo_neto_dia = ingresos_efectivo_hoy - gastos_totales_hoy
 
         cierres_previos_hoy = CajaDiaria.objects.filter(
             fecha_cierre__date=hoy
         ).aggregate(total=Sum('total_efectivo_ventas'))['total'] or Decimal('0.00')
 
-        nuevo_efectivo = ingresos_efectivo_hoy - cierres_previos_hoy
+        nuevo_efectivo = efectivo_neto_dia - cierres_previos_hoy
 
-        if nuevo_efectivo <= 0 and cant_ventas_credito == 0:
+        if nuevo_efectivo <= 0 and cant_ventas_credito == 0 and cant_gastos == 0:
             return Response({'error': 'No hay movimientos nuevos registrados en este turno para cerrar.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if nuevo_efectivo > 0:
+        efectivo_a_retirar = nuevo_efectivo if nuevo_efectivo > Decimal('0.00') else Decimal('0.00')
+
+        if efectivo_a_retirar > 0:
             with transaction.atomic():
                 CajaDiaria.objects.create(
                     fecha_cierre=ahora,
                     base_inicial=Decimal('0.00'),
-                    total_efectivo_ventas=nuevo_efectivo,
+                    total_efectivo_ventas=efectivo_a_retirar,
                     total_efectivo_corresponsal=Decimal('0.00'),
                     estado='Cerrada'
                 )
@@ -162,21 +238,90 @@ def cierre_de_caja(request):
         return Response({
             'mensaje': 'Corte de caja generado',
             'fecha_hora_corte': ahora.strftime('%d/%m/%Y %I:%M:%S %p'),
-            'nuevo_efectivo': str(nuevo_efectivo),
+            'nuevo_efectivo': str(efectivo_a_retirar),
+            'saldo_cajon_calculado': str(nuevo_efectivo),
             'cierres_previos': str(cierres_previos_hoy),
-            'total_efectivo_dia': str(ingresos_efectivo_hoy),
+            'total_efectivo_dia': str(efectivo_neto_dia),
             'ventas_efectivo': str(ventas_efectivo),
             'cant_ventas_efectivo': cant_ventas_efectivo,
             'ventas_credito': str(ventas_credito),
             'cant_ventas_credito': cant_ventas_credito,
             'abonos_hoy': str(abonos_totales_hoy),
             'cant_abonos': cant_abonos,
-            'ganancia_neta_dia': str(ganancia_estimada_hoy.quantize(Decimal('0.01')))
+            'gastos_hoy': str(gastos_totales_hoy),
+            'cant_gastos': cant_gastos,
+            'ganancia_neta_dia': str(ganancia_ventas_hoy.quantize(Decimal('0.01')))
         }, status=status.HTTP_200_OK)
 
     except Exception as e:
         return Response({'error': f'Error interno: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)        
         
+@api_view(['GET'])
+def historial_cierres_caja(request):
+    try:
+        cierres = CajaDiaria.objects.all().order_by('-fecha_cierre')[:50]
+        datos = []
+
+        for cierre in cierres:
+            fecha_local = timezone.localtime(cierre.fecha_cierre) if cierre.fecha_cierre else timezone.localtime(timezone.now())
+            fecha_dia = fecha_local.date()
+
+            # Ventas de ese día
+            ventas_dia_qs = Ventas.objects.filter(fecha_hora__date=fecha_dia)
+            ventas_efectivo = ventas_dia_qs.filter(metodo_pago__iexact='Efectivo').aggregate(total=Sum('total_venta'))['total'] or Decimal('0.00')
+            cant_ventas_efectivo = ventas_dia_qs.filter(metodo_pago__iexact='Efectivo').count()
+
+            ventas_credito = ventas_dia_qs.filter(metodo_pago__iexact='Crédito').aggregate(total=Sum('total_venta'))['total'] or Decimal('0.00')
+            cant_ventas_credito = ventas_dia_qs.filter(metodo_pago__iexact='Crédito').count()
+
+            # Abonos de ese día
+            abonos_dia_qs = Abono.objects.filter(fecha_registro__date=fecha_dia)
+            abonos_totales = abonos_dia_qs.aggregate(total=Sum('monto'))['total'] or Decimal('0.00')
+            cant_abonos = abonos_dia_qs.count()
+
+            # Gastos de ese día
+            gastos_dia_qs = Gastos.objects.filter(fecha_hora__date=fecha_dia)
+            gastos_totales = gastos_dia_qs.aggregate(total=Sum('monto'))['total'] or Decimal('0.00')
+            cant_gastos = gastos_dia_qs.count()
+
+            # Ganancia neta de ese día
+            detalles_dia = DetalleVentas.objects.select_related('id_producto').filter(id_venta__fecha_hora__date=fecha_dia)
+            ganancia_dia = Decimal('0.00')
+            for d in detalles_dia:
+                if d.id_producto:
+                    costo = d.id_producto.precio_mayorista or Decimal('0.00')
+                    ganancia_dia += (d.precio_unitario_aplicado - costo) * d.cantidad
+
+            ingresos_efectivo = ventas_efectivo + abonos_totales
+            efectivo_neto_dia = ingresos_efectivo - gastos_totales
+
+            # Cortes previos a este cierre en ese mismo día
+            cierres_previos = CajaDiaria.objects.filter(
+                fecha_cierre__date=fecha_dia,
+                fecha_cierre__lt=cierre.fecha_cierre
+            ).aggregate(total=Sum('total_efectivo_ventas'))['total'] or Decimal('0.00')
+
+            datos.append({
+                'id_cierre': cierre.pk,
+                'fecha_hora_corte': fecha_local.strftime('%d/%m/%Y %I:%M:%S %p'),
+                'nuevo_efectivo': str(cierre.total_efectivo_ventas),
+                'cierres_previos': str(cierres_previos),
+                'total_efectivo_dia': str(efectivo_neto_dia),
+                'ventas_efectivo': str(ventas_efectivo),
+                'cant_ventas_efectivo': cant_ventas_efectivo,
+                'ventas_credito': str(ventas_credito),
+                'cant_ventas_credito': cant_ventas_credito,
+                'abonos_hoy': str(abonos_totales),
+                'cant_abonos': cant_abonos,
+                'gastos_hoy': str(gastos_totales),
+                'cant_gastos': cant_gastos,
+                'ganancia_neta_dia': str(ganancia_dia.quantize(Decimal('0.01')))
+            })
+
+        return Response(datos, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 @api_view(['POST'])
 def registrar_transaccion_bancaria(request):
     try:

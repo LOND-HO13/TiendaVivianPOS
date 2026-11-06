@@ -20,8 +20,10 @@ urlpatterns = [
     path('procesar-venta/', views.procesar_venta),
     path('ventas/historial/', views.historial_ventas_completas),
     path('abonos/', views.registrar_abono),
+    path('gastos/', views.gestionar_gastos),
     path('cartera/detalles/<int:id_cliente>/', views.detalles_deuda_cliente),
     path('cierre-caja/', views.cierre_de_caja),
+    path('cierre-caja/historial/', views.historial_cierres_caja),
     
     # 3. RUTAS AUTOMÁTICAS AL FINAL
     path('auto/', include(router.urls)),

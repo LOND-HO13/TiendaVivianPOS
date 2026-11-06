@@ -5,9 +5,27 @@
 #   * Make sure each ForeignKey and OneToOneField has `on_delete` set to the desired behavior
 #   * Remove `managed = False` lines if you wish to allow Django to create, modify, and delete the table
 # Feel free to rename the models, but don't rename db_table values or field names.
+from django.utils import timezone
 from django.db import models
 from django.core.validators import MinValueValidator
 from decimal import Decimal
+
+class Gastos(models.Model):
+    id_gasto = models.AutoField(primary_key=True)
+    tipo_gasto = models.CharField(max_length=50, default='Proveedor')  # Proveedor, Caja Menor, Servicios
+    descripcion = models.CharField(max_length=255)
+    monto = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))]
+    )
+    fecha_hora = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = 'gastos'
+
+    def __str__(self):
+        return f"{self.tipo_gasto}: {self.descripcion} (-${self.monto})"
 
 
 class Abonos(models.Model):
@@ -18,6 +36,7 @@ class Abonos(models.Model):
     monto_total_pagado = models.DecimalField(max_digits=12, decimal_places=2)
     interes_pagado = models.DecimalField(max_digits=12, decimal_places=2)
     capital_reducido = models.DecimalField(max_digits=12, decimal_places=2)
+
 
 class Abono(models.Model):
     # Apuntamos exactamente al modelo Clientes
@@ -47,7 +66,6 @@ class Categorias(models.Model):
     descripcion = models.TextField(blank=True, null=True)
 
 
-
 class Clientes(models.Model):
     id_cliente = models.AutoField(primary_key=True)
     documento_identidad = models.CharField(unique=True, max_length=20, blank=True, null=True)
@@ -72,7 +90,6 @@ class CuentasPorCobrar(models.Model):
     estado = models.CharField(max_length=20, blank=True, null=True)
 
 
-
 class DetalleVentas(models.Model):
     id_detalle = models.AutoField(primary_key=True)
     id_venta = models.ForeignKey('Ventas', models.CASCADE, db_column='id_venta', blank=True, null=True)
@@ -80,8 +97,6 @@ class DetalleVentas(models.Model):
     cantidad = models.DecimalField(max_digits=10, decimal_places=3)
     precio_unitario_aplicado = models.DecimalField(max_digits=12, decimal_places=2)
     subtotal = models.DecimalField(max_digits=12, decimal_places=2)
-
-
 
 
 class InteraccionesWhatsapp(models.Model):
@@ -93,13 +108,11 @@ class InteraccionesWhatsapp(models.Model):
     estado_entrega = models.CharField(max_length=20, blank=True, null=True)
 
 
-
 class PlantillasMensajes(models.Model):
     id_plantilla = models.AutoField(primary_key=True)
     proposito = models.CharField(unique=True, max_length=50)
     contenido_texto = models.TextField()
     activo = models.BooleanField(blank=True, null=True)
-
 
 
 class Productos(models.Model):
@@ -117,13 +130,13 @@ class Productos(models.Model):
     precio_detal = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.00'))])
     precio_mayorista = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.00'))])
     stock_actual = models.DecimalField(max_digits=10, decimal_places=3, validators=[MinValueValidator(Decimal('0.000'))])
-
+    stock_actual = models.DecimalField(max_digits=10, decimal_places=3, validators=[MinValueValidator(Decimal('0.000'))])
+    stock_minimo = models.DecimalField(max_digits=10, decimal_places=3, default=5.000, validators=[MinValueValidator(Decimal('0.000'))])
 
 
 class Roles(models.Model):
     id_rol = models.AutoField(primary_key=True)
     nombre_rol = models.CharField(unique=True, max_length=50)
-
 
 
 class TransaccionesFinancieras(models.Model):
@@ -137,7 +150,6 @@ class TransaccionesFinancieras(models.Model):
     estado = models.CharField(max_length=20, blank=True, null=True)
 
 
-
 class Usuarios(models.Model):
     id_usuario = models.AutoField(primary_key=True)
     username = models.CharField(unique=True, max_length=50)
@@ -146,7 +158,6 @@ class Usuarios(models.Model):
     nombre_empleado = models.CharField(max_length=150)
     estado_activo = models.BooleanField(blank=True, null=True)
     fecha_creacion = models.DateTimeField(blank=True, null=True)
-
 
 
 class Ventas(models.Model):
