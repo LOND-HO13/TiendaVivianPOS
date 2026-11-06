@@ -6,6 +6,8 @@
 #   * Remove `managed = False` lines if you wish to allow Django to create, modify, and delete the table
 # Feel free to rename the models, but don't rename db_table values or field names.
 from django.db import models
+from django.core.validators import MinValueValidator
+from decimal import Decimal
 
 
 class Abonos(models.Model):
@@ -17,6 +19,14 @@ class Abonos(models.Model):
     interes_pagado = models.DecimalField(max_digits=12, decimal_places=2)
     capital_reducido = models.DecimalField(max_digits=12, decimal_places=2)
 
+class Abono(models.Model):
+    # Apuntamos exactamente al modelo Clientes
+    cliente = models.ForeignKey('Clientes', on_delete=models.CASCADE, related_name='historial_abonos')
+    monto = models.DecimalField(max_digits=10, decimal_places=2)
+    fecha_registro = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"${self.monto} - {self.cliente.nombre_completo}"
 
 
 class CajaDiaria(models.Model):
@@ -29,7 +39,6 @@ class CajaDiaria(models.Model):
     total_efectivo_ventas = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
     total_efectivo_corresponsal = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
     estado = models.CharField(max_length=20, blank=True, null=True)
-
 
 
 class Categorias(models.Model):
@@ -47,7 +56,9 @@ class Clientes(models.Model):
     acepta_notificaciones_whatsapp = models.BooleanField(blank=True, null=True)
     cupo_credito = models.DecimalField(max_digits=12, decimal_places=2)
     estado_riesgo = models.CharField(max_length=20, blank=True, null=True)
-
+    deuda_actual = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    cupo_credito = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.00'))])
+    deuda_actual = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, validators=[MinValueValidator(Decimal('0.00'))])
 
 
 class CuentasPorCobrar(models.Model):
@@ -103,6 +114,9 @@ class Productos(models.Model):
     permite_decimales = models.BooleanField()
     stock_actual = models.DecimalField(max_digits=10, decimal_places=3)
     fecha_creacion = models.DateTimeField(blank=True, null=True)
+    precio_detal = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.00'))])
+    precio_mayorista = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.00'))])
+    stock_actual = models.DecimalField(max_digits=10, decimal_places=3, validators=[MinValueValidator(Decimal('0.000'))])
 
 
 

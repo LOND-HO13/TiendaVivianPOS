@@ -1,17 +1,28 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import CategoriaViewSet, ProductoViewSet, ClienteViewSet, procesar_venta, registrar_abono, registrar_transaccion_bancaria, cierre_de_caja
+from . import views
 
+# 1. Configurar los ViewSets automáticos
 router = DefaultRouter()
-router.register(r'categorias', CategoriaViewSet)
-router.register(r'productos', ProductoViewSet)
-router.register(r'clientes', ClienteViewSet)
+router.register(r'clientes-auto', views.ClienteViewSet, basename='cliente')
+router.register(r'productos-auto', views.ProductoViewSet, basename='producto')
+router.register(r'categorias-auto', views.CategoriaViewSet, basename='categoria')
 
 urlpatterns = [
-    path('', include(router.urls)),
-    path('procesar-venta/', procesar_venta, name='procesar_venta'),
-    path('registrar-abono/', registrar_abono, name='registrar_abono'),
-    path('transaccion-bancaria/', registrar_transaccion_bancaria, name='registrar_transaccion_bancaria'),
-    path('cierre-caja/', cierre_de_caja, name='cierre_de_caja'),
+    # 2. FUNCIONES PERSONALIZADAS PRIMERO (Sin el prefijo "api/")
+    path('categorias/', views.gestionar_categorias),
+    path('productos/crear/', views.crear_producto),
+    path('productos/<int:id_producto>/editar/', views.editar_producto),
     
+    path('productos/', views.ProductoViewSet.as_view({'get': 'list'})), 
+    path('clientes/', views.ClienteViewSet.as_view({'get': 'list', 'post': 'create'})),
+
+    path('procesar-venta/', views.procesar_venta),
+    path('ventas/historial/', views.historial_ventas_completas),
+    path('abonos/', views.registrar_abono),
+    path('cartera/detalles/<int:id_cliente>/', views.detalles_deuda_cliente),
+    path('cierre-caja/', views.cierre_de_caja),
+    
+    # 3. RUTAS AUTOMÁTICAS AL FINAL
+    path('auto/', include(router.urls)),
 ]
